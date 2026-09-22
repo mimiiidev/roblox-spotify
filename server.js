@@ -1,5 +1,5 @@
-import express from "express";
-import crypto from "crypto";
+const express = require("express");
+const crypto = require("crypto");
 
 const app = express();
 
@@ -11,35 +11,7 @@ const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL;
 
-if (!CLIENT_ID || !CLIENT_SECRET || !BASE_URL) {
-    console.error("Variables manquantes !");
-    console.error("SPOTIFY_CLIENT_ID");
-    console.error("SPOTIFY_CLIENT_SECRET");
-    console.error("BASE_URL");
-    process.exit(1);
-}
-
 const REDIRECT_URI = `${BASE_URL}/callback`;
-
-/*
-==================================================
-STOCKAGE TEMPORAIRE
-==================================================
-
-Pour commencer, les connexions sont gardées
-en mémoire.
-
-Si Render redémarre, les joueurs devront
-se reconnecter.
-*/
-
-const sessions = new Map();
-
-/*
-==================================================
-SCOPES SPOTIFY
-==================================================
-*/
 
 const SCOPES = [
     "user-read-playback-state",
@@ -47,50 +19,37 @@ const SCOPES = [
     "user-read-currently-playing"
 ].join(" ");
 
-/*
-==================================================
-GÉNÉRER UN CODE
-==================================================
-*/
+const sessions = new Map();
 
-function generateCode() {
-    return String(
-        Math.floor(100000 + Math.random() * 900000)
-    );
-}
 
-/*
-==================================================
-GÉNÉRER UN STATE OAUTH
-==================================================
-*/
-
-function generateState() {
-    return crypto.randomBytes(32).toString("hex");
-}
-
-/*
-==================================================
-PAGE D'ACCUEIL
-==================================================
-*/
+// ======================================================
+// PAGE PRINCIPALE
+// ======================================================
 
 app.get("/", (req, res) => {
-
     res.send(`
         <!DOCTYPE html>
-        <html>
+        <html lang="fr">
         <head>
             <meta charset="UTF-8">
             <title>Roblox Spotify</title>
-
             <style>
                 body {
                     background: #121212;
                     color: white;
                     font-family: Arial, sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                }
+
+                .box {
                     text-align: center;
-                    padding-top: 100px;
+                    padding: 40px;
+                    background: #181818;
+                    border-radius: 20px;
                 }
 
                 h1 {
@@ -98,113 +57,71 @@ app.get("/", (req, res) => {
                 }
             </style>
         </head>
-
         <body>
-
-            <h1>♫ Roblox Spotify</h1>
-
-            <p>
-                Serveur Spotify opérationnel.
-            </p>
-
+            <div class="box">
+                <h1>♫ Roblox Spotify</h1>
+                <p>Serveur Spotify opérationnel.</p>
+            </div>
         </body>
         </html>
     `);
 });
 
-/*
-==================================================
-CRÉER UNE SESSION DE CONNEXION
-==================================================
 
-Roblox appellera cette route.
-
-Elle donne :
-
-- un code
-- une URL Spotify
-*/
+// ======================================================
+// CRÉER UNE SESSION
+// ======================================================
 
 app.post("/auth/create", (req, res) => {
 
     const playerId = req.body?.playerId;
 
     if (!playerId) {
-
         return res.status(400).json({
             success: false,
-            error: "playerId manquant"
+            error: "playerId manquant."
         });
-
     }
 
     let code;
 
     do {
-        code = generateCode();
+        code = Math.floor(100000 + Math.random() * 900000).toString();
     } while (sessions.has(code));
 
-    const state = generateState();
-
     sessions.set(code, {
-
         playerId: String(playerId),
-
-        state: state,
-
-        connected: false,
-
         accessToken: null,
-
         refreshToken: null,
-
-        expiresAt: 0,
-
+        connected: false,
         createdAt: Date.now()
-
     });
 
     const params = new URLSearchParams({
-
         response_type: "code",
-
         client_id: CLIENT_ID,
-
         scope: SCOPES,
-
         redirect_uri: REDIRECT_URI,
-
-        state: state,
-
-        show_dialog: "true"
-
+        state: code
     });
 
-    const spotifyUrl =
+    const authUrl =
         "https://accounts.spotify.com/authorize?" +
         params.toString();
 
+    console.log("Nouvelle session :", code);
+
     res.json({
-
         success: true,
-
-        code: code,
-
-        url: spotifyUrl
-
+        code,
+        authUrl
     });
 });
 
-/*
-==================================================
-OUVRIR SPOTIFY
-==================================================
 
-Le joueur arrive sur :
-
-https://tonserveur.onrender.com/auth/123456
-
-*/
+// ======================================================
+// REDIRECTION VERS SPOTIFY
+// ======================================================
 
 app.get("/auth/:code", (req, res) => {
 
@@ -213,39 +130,15 @@ app.get("/auth/:code", (req, res) => {
     const session = sessions.get(code);
 
     if (!session) {
-
-        return res.status(404).send(`
-            <h1>Code invalide</h1>
-            <p>Ce code n'existe plus.</p>
-        `);
-
-    }
-
-    if (Date.now() - session.createdAt > 10 * 60 * 1000) {
-
-        sessions.delete(code);
-
-        return res.status(410).send(`
-            <h1>Code expiré</h1>
-            <p>Retourne dans Roblox et génère un nouveau code.</p>
-        `);
-
+        return res.status(404).send("Session introuvable.");
     }
 
     const params = new URLSearchParams({
-
         response_type: "code",
-
         client_id: CLIENT_ID,
-
         scope: SCOPES,
-
         redirect_uri: REDIRECT_URI,
-
-        state: session.state,
-
-        show_dialog: "true"
-
+        state: code
     });
 
     res.redirect(
@@ -254,123 +147,52 @@ app.get("/auth/:code", (req, res) => {
     );
 });
 
-/*
-==================================================
-CALLBACK SPOTIFY
-==================================================
-*/
+
+// ======================================================
+// CALLBACK SPOTIFY
+// ======================================================
 
 app.get("/callback", async (req, res) => {
 
-    const code = req.query.code;
-    const state = req.query.state;
-    const error = req.query.error;
+    const { code, state, error } = req.query;
 
     if (error) {
-
         return res.send(`
-            <!DOCTYPE html>
-            <html>
-            <body style="
-                background:#121212;
-                color:white;
-                text-align:center;
-                font-family:Arial;
-                padding-top:100px;
-            ">
-
-                <h1 style="color:#e22134;">
-                    Connexion annulée
-                </h1>
-
-                <p>
-                    Tu peux fermer cette fenêtre.
-                </p>
-
-            </body>
-            </html>
+            <h1>Connexion Spotify annulée</h1>
+            <p>${error}</p>
         `);
-
     }
 
     if (!code || !state) {
-
-        return res.status(400).send(
-            "Paramètres Spotify manquants."
-        );
-
+        return res.status(400).send("Paramètres Spotify manquants.");
     }
 
-    /*
-    ----------------------------------------------
-    RETROUVER LA SESSION
-    ----------------------------------------------
-    */
-
-    let session = null;
-
-    for (const currentSession of sessions.values()) {
-
-        if (currentSession.state === state) {
-
-            session = currentSession;
-
-            break;
-
-        }
-
-    }
+    const session = sessions.get(state);
 
     if (!session) {
-
-        return res.status(400).send(
-            "Session OAuth invalide ou expirée."
-        );
-
+        return res.status(404).send("Session Roblox introuvable.");
     }
-
-    /*
-    ----------------------------------------------
-    ÉCHANGER LE CODE CONTRE LES TOKENS
-    ----------------------------------------------
-    */
 
     try {
 
-        const credentials = Buffer
-            .from(
-                `${CLIENT_ID}:${CLIENT_SECRET}`
-            )
-            .toString("base64");
+        const credentials =
+            Buffer
+                .from(`${CLIENT_ID}:${CLIENT_SECRET}`)
+                .toString("base64");
 
         const response = await fetch(
             "https://accounts.spotify.com/api/token",
             {
-
                 method: "POST",
-
                 headers: {
-
-                    "Authorization":
-                        `Basic ${credentials}`,
-
-                    "Content-Type":
-                        "application/x-www-form-urlencoded"
-
+                    "Authorization": `Basic ${credentials}`,
+                    "Content-Type": "application/x-www-form-urlencoded"
                 },
-
                 body: new URLSearchParams({
-
-                    grant_type:
-                        "authorization_code",
-
+                    grant_type: "authorization_code",
                     code: code,
-
-                    redirect_uri:
-                        REDIRECT_URI
-
+                    redirect_uri: REDIRECT_URI
                 })
-
             }
         );
 
@@ -379,611 +201,588 @@ app.get("/callback", async (req, res) => {
         if (!response.ok) {
 
             console.error(
-                "Spotify token error:",
+                "Erreur token Spotify :",
+                response.status,
                 data
             );
 
             return res.status(500).send(`
                 <h1>Erreur Spotify</h1>
-                <p>Impossible de connecter le compte.</p>
+                <p>Impossible de récupérer le token.</p>
             `);
-
         }
 
-        /*
-        ------------------------------------------
-        ENREGISTRER LES TOKENS
-        ------------------------------------------
-        */
-
-        session.accessToken =
-            data.access_token;
-
-        session.refreshToken =
-            data.refresh_token;
-
-        session.expiresAt =
-            Date.now() +
-            (data.expires_in * 1000);
-
+        session.accessToken = data.access_token;
+        session.refreshToken = data.refresh_token;
         session.connected = true;
+        session.createdAt = Date.now();
 
-        /*
-        ------------------------------------------
-        PAGE DE SUCCÈS
-        ------------------------------------------
-        */
+        console.log(
+            "Spotify connecté pour la session :",
+            state
+        );
 
         res.send(`
             <!DOCTYPE html>
-
-            <html>
-
+            <html lang="fr">
             <head>
-
                 <meta charset="UTF-8">
-
                 <title>Spotify connecté</title>
-
                 <style>
-
                     body {
-                        background:#121212;
-                        color:white;
-                        font-family:Arial;
-                        text-align:center;
-                        padding-top:100px;
+                        background: #121212;
+                        color: white;
+                        font-family: Arial, sans-serif;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        height: 100vh;
+                        margin: 0;
                     }
 
                     .box {
-                        background:#181818;
-                        padding:40px;
-                        border-radius:20px;
-                        display:inline-block;
+                        background: #181818;
+                        padding: 40px;
+                        border-radius: 20px;
+                        text-align: center;
                     }
 
                     h1 {
-                        color:#1ed760;
+                        color: #1ed760;
                     }
-
                 </style>
-
             </head>
-
             <body>
-
                 <div class="box">
-
-                    <h1>
-                        ✓ Spotify connecté
-                    </h1>
-
-                    <p>
-                        Ton compte Spotify est maintenant
-                        connecté à Roblox.
-                    </p>
-
-                    <p>
-                        Tu peux fermer cette page.
-                    </p>
-
+                    <h1>✓ Spotify connecté</h1>
+                    <p>Ton compte Spotify est maintenant connecté à Roblox.</p>
+                    <p>Tu peux fermer cette page.</p>
                 </div>
-
             </body>
-
             </html>
         `);
 
-    } catch (error) {
+    } catch (err) {
 
-        console.error(error);
+        console.error("Erreur callback :", err);
 
-        res.status(500).send(
-            "Erreur interne du serveur."
-        );
-
+        res.status(500).send(`
+            <h1>Erreur serveur</h1>
+            <p>Une erreur est survenue pendant la connexion.</p>
+        `);
     }
-
 });
 
-/*
-==================================================
-RAFRAÎCHIR LE TOKEN
-==================================================
-*/
 
-async function getAccessToken(session) {
+// ======================================================
+// RAFRAÎCHIR LE TOKEN
+// ======================================================
 
-    if (!session) {
-        return null;
-    }
-
-    /*
-    Le token actuel est encore valide
-    */
-
-    if (
-        session.accessToken &&
-        Date.now() <
-            session.expiresAt - 60 * 1000
-    ) {
-
-        return session.accessToken;
-
-    }
-
-    /*
-    Pas de refresh token
-    */
+async function refreshAccessToken(session) {
 
     if (!session.refreshToken) {
-
-        session.connected = false;
-
-        return null;
-
+        throw new Error("Refresh token manquant.");
     }
 
-    try {
-
-        const credentials = Buffer
-            .from(
-                `${CLIENT_ID}:${CLIENT_SECRET}`
-            )
+    const credentials =
+        Buffer
+            .from(`${CLIENT_ID}:${CLIENT_SECRET}`)
             .toString("base64");
 
-        const response = await fetch(
-            "https://accounts.spotify.com/api/token",
-            {
+    const response = await fetch(
+        "https://accounts.spotify.com/api/token",
+        {
+            method: "POST",
+            headers: {
+                "Authorization": `Basic ${credentials}`,
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: new URLSearchParams({
+                grant_type: "refresh_token",
+                refresh_token: session.refreshToken
+            })
+        }
+    );
 
-                method: "POST",
+    const data = await response.json();
 
-                headers: {
+    if (!response.ok) {
 
-                    "Authorization":
-                        `Basic ${credentials}`,
-
-                    "Content-Type":
-                        "application/x-www-form-urlencoded"
-
-                },
-
-                body: new URLSearchParams({
-
-                    grant_type:
-                        "refresh_token",
-
-                    refresh_token:
-                        session.refreshToken
-
-                })
-
-            }
+        console.error(
+            "Erreur refresh token :",
+            response.status,
+            data
         );
 
-        const data = await response.json();
-
-        if (!response.ok) {
-
-            console.error(
-                "Refresh token error:",
-                data
-            );
-
-            session.connected = false;
-
-            return null;
-
-        }
-
-        session.accessToken =
-            data.access_token;
-
-        session.expiresAt =
-            Date.now() +
-            (data.expires_in * 1000);
-
-        if (data.refresh_token) {
-
-            session.refreshToken =
-                data.refresh_token;
-
-        }
-
-        return session.accessToken;
-
-    } catch (error) {
-
-        console.error(error);
-
-        return null;
-
+        throw new Error(
+            data.error_description ||
+            "Impossible de rafraîchir le token."
+        );
     }
 
+    session.accessToken = data.access_token;
+
+    if (data.refresh_token) {
+        session.refreshToken = data.refresh_token;
+    }
+
+    return session.accessToken;
 }
 
-/*
-==================================================
-REQUÊTE SPOTIFY
-==================================================
-*/
+
+// ======================================================
+// REQUÊTE SPOTIFY
+// ======================================================
 
 async function spotifyRequest(
     session,
+    method,
     endpoint,
-    method = "GET"
+    body = null,
+    retry = true
 ) {
 
-    const accessToken =
-        await getAccessToken(session);
+    if (!session.accessToken) {
+        throw new Error("Compte Spotify non connecté.");
+    }
 
-    if (!accessToken) {
-        return null;
+    const options = {
+        method,
+        headers: {
+            "Authorization": `Bearer ${session.accessToken}`
+        }
+    };
+
+    if (body !== null) {
+
+        options.headers["Content-Type"] =
+            "application/json";
+
+        options.body = JSON.stringify(body);
+    }
+
+    let response = await fetch(
+        "https://api.spotify.com/v1" + endpoint,
+        options
+    );
+
+    // --------------------------------------------------
+    // TOKEN EXPIRÉ
+    // --------------------------------------------------
+
+    if (response.status === 401 && retry) {
+
+        console.log("Token Spotify expiré, refresh...");
+
+        await refreshAccessToken(session);
+
+        return spotifyRequest(
+            session,
+            method,
+            endpoint,
+            body,
+            false
+        );
+    }
+
+    // --------------------------------------------------
+    // 204 = SUCCÈS SANS CONTENU
+    // --------------------------------------------------
+
+    if (response.status === 204) {
+
+        return {
+            status: 204,
+            data: null
+        };
+    }
+
+    // --------------------------------------------------
+    // AUTRES RÉPONSES
+    // --------------------------------------------------
+
+    const text = await response.text();
+
+    let data = null;
+
+    if (text) {
+
+        try {
+            data = JSON.parse(text);
+        } catch {
+            data = {
+                message: text
+            };
+        }
+    }
+
+    return {
+        status: response.status,
+        data
+    };
+}
+
+
+// ======================================================
+// STATUT DE CONNEXION
+// ======================================================
+
+app.get("/auth/status/:code", (req, res) => {
+
+    const session = sessions.get(req.params.code);
+
+    if (!session) {
+        return res.json({
+            success: false,
+            connected: false,
+            error: "Session introuvable."
+        });
+    }
+
+    res.json({
+        success: true,
+        connected:
+            Boolean(session.accessToken) &&
+            Boolean(session.refreshToken)
+    });
+});
+
+
+// ======================================================
+// LECTURE ACTUELLE
+// ======================================================
+
+app.get("/player/:code", async (req, res) => {
+
+    const session = sessions.get(req.params.code);
+
+    if (!session) {
+        return res.json({
+            success: false,
+            connected: false,
+            error: "Session introuvable."
+        });
+    }
+
+    if (!session.accessToken) {
+        return res.json({
+            success: true,
+            connected: false
+        });
     }
 
     try {
 
-        const response = await fetch(
-            `https://api.spotify.com/v1${endpoint}`,
-            {
-
-                method: method,
-
-                headers: {
-
-                    "Authorization":
-                        `Bearer ${accessToken}`
-
-                }
-
-            }
+        const result = await spotifyRequest(
+            session,
+            "GET",
+            "/me/player"
         );
 
-        /*
-        Spotify renvoie 204 quand certaines
-        commandes ont réussi.
-        */
+        // ------------------------------------------------
+        // AUCUNE MUSIQUE EN COURS
+        // ------------------------------------------------
 
-        if (response.status === 204) {
+        if (result.status === 204) {
 
-            return {
-                success: true
-            };
-
+            return res.json({
+                success: true,
+                connected: true,
+                playing: false,
+                name: null,
+                artist: null,
+                position: 0,
+                duration: 0,
+                cover: null
+            });
         }
 
-        const text =
-            await response.text();
+        // ------------------------------------------------
+        // ERREUR SPOTIFY
+        // ------------------------------------------------
 
-        if (!text) {
-
-            return {
-                success:
-                    response.ok
-            };
-
-        }
-
-        let data;
-
-        try {
-
-            data =
-                JSON.parse(text);
-
-        } catch {
-
-            data = {};
-
-        }
-
-        if (!response.ok) {
+        if (result.status >= 400) {
 
             console.error(
-                "Spotify API error:",
-                response.status,
-                data
+                "Erreur /me/player :",
+                result.status,
+                result.data
             );
 
-            return null;
-
-        }
-
-        return data;
-
-    } catch (error) {
-
-        console.error(
-            "Spotify request error:",
-            error
-        );
-
-        return null;
-
-    }
-
-}
-
-/*
-==================================================
-STATUT DE CONNEXION
-==================================================
-*/
-
-app.get("/auth/status/:code", (req, res) => {
-
-    const code = req.params.code;
-
-    const session =
-        sessions.get(code);
-
-    if (!session) {
-
-        return res.json({
-            connected: false,
-            exists: false
-        });
-
-    }
-
-    res.json({
-
-        connected:
-            session.connected === true,
-
-        exists: true
-
-    });
-
-});
-
-/*
-==================================================
-LECTEUR ACTUEL
-==================================================
-*/
-
-app.get("/player/:code", async (req, res) => {
-
-    const code = req.params.code;
-
-    const session =
-        sessions.get(code);
-
-    if (!session || !session.connected) {
-
-        return res.json({
-
-            connected: false
-
-        });
-
-    }
-
-    const data =
-        await spotifyRequest(
-            session,
-            "/me/player",
-            "GET"
-        );
-
-    if (!data) {
-
-        return res.json({
-
-            connected: false
-
-        });
-
-    }
-
-    if (!data.item) {
-
-        return res.json({
-
-            connected: true,
-
-            playing: false,
-
-            name: "Aucun morceau",
-
-            artist: "",
-
-            position: 0,
-
-            duration: 0,
-
-            cover: ""
-
-        });
-
-    }
-
-    const item =
-        data.item;
-
-    const artist =
-        item.artists
-            ?.map(a => a.name)
-            .join(", ") || "";
-
-    const cover =
-        item.album
-            ?.images
-            ?.at(0)
-            ?.url || "";
-
-    res.json({
-
-        connected: true,
-
-        playing:
-            data.is_playing === true,
-
-        name:
-            item.name || "Inconnu",
-
-        artist:
-            artist,
-
-        position:
-            data.progress_ms || 0,
-
-        duration:
-            item.duration_ms || 0,
-
-        cover:
-            cover
-
-    });
-
-});
-
-/*
-==================================================
-COMMANDES DU LECTEUR
-==================================================
-*/
-
-app.post(
-    "/player/:action/:code",
-    async (req, res) => {
-
-        const action =
-            req.params.action;
-
-        const code =
-            req.params.code;
-
-        const session =
-            sessions.get(code);
-
-        if (!session || !session.connected) {
-
-            return res.status(401).json({
-
-                success: false,
-
-                error:
-                    "Spotify non connecté"
-
-            });
-
-        }
-
-        const commands = {
-
-            play: {
-                endpoint: "/me/player/play",
-                method: "PUT"
-            },
-
-            pause: {
-                endpoint: "/me/player/pause",
-                method: "PUT"
-            },
-
-            next: {
-                endpoint: "/me/player/next",
-                method: "POST"
-            },
-
-            previous: {
-                endpoint: "/me/player/previous",
-                method: "POST"
+            if (result.status === 401) {
+                session.connected = false;
+
+                return res.json({
+                    success: false,
+                    connected: false,
+                    error: "Session Spotify expirée."
+                });
             }
 
-        };
-
-        const command =
-            commands[action];
-
-        if (!command) {
-
-            return res.status(400).json({
-
+            return res.status(502).json({
                 success: false,
-
+                connected: true,
                 error:
-                    "Commande inconnue"
-
+                    result.data?.error?.message ||
+                    "Spotify a refusé la requête."
             });
-
         }
 
-        const result =
-            await spotifyRequest(
-                session,
-                command.endpoint,
-                command.method
-            );
+        const data = result.data;
 
-        if (!result) {
+        // ------------------------------------------------
+        // PAS DE TRACK
+        // ------------------------------------------------
 
-            return res.status(500).json({
+        if (!data || !data.item) {
 
-                success: false,
-
-                error:
-                    "Spotify n'a pas répondu"
-
+            return res.json({
+                success: true,
+                connected: true,
+                playing: false,
+                name: null,
+                artist: null,
+                position: 0,
+                duration: 0,
+                cover: null
             });
-
         }
+
+        const item = data.item;
+
+        const artists =
+            item.artists
+                ?.map(a => a.name)
+                .join(", ") ||
+            "Artiste inconnu";
+
+        const cover =
+            item.album?.images?.[0]?.url ||
+            null;
 
         res.json({
+            success: true,
+            connected: true,
+            playing: Boolean(data.is_playing),
 
-            success: true
+            name: item.name || "Musique inconnue",
 
+            artist: artists,
+
+            position:
+                Number(data.progress_ms) || 0,
+
+            duration:
+                Number(item.duration_ms) || 0,
+
+            cover
         });
 
-    }
-);
+    } catch (err) {
 
-/*
-==================================================
-NETTOYAGE DES SESSIONS
-==================================================
-*/
+        console.error(
+            "Erreur player :",
+            err
+        );
+
+        res.status(500).json({
+            success: false,
+            connected: true,
+            error: err.message
+        });
+    }
+});
+
+
+// ======================================================
+// COMMANDES PLAY / PAUSE / NEXT / PREVIOUS
+// ======================================================
+
+app.post("/player/:action/:code", async (req, res) => {
+
+    const action = req.params.action;
+    const code = req.params.code;
+
+    const session = sessions.get(code);
+
+    if (!session) {
+        return res.status(404).json({
+            success: false,
+            error: "Session introuvable."
+        });
+    }
+
+    if (!session.accessToken) {
+        return res.status(401).json({
+            success: false,
+            error: "Spotify non connecté."
+        });
+    }
+
+    const commands = {
+
+        play: {
+            method: "PUT",
+            endpoint: "/me/player/play"
+        },
+
+        pause: {
+            method: "PUT",
+            endpoint: "/me/player/pause"
+        },
+
+        next: {
+            method: "POST",
+            endpoint: "/me/player/next"
+        },
+
+        previous: {
+            method: "POST",
+            endpoint: "/me/player/previous"
+        }
+    };
+
+    const command = commands[action];
+
+    if (!command) {
+        return res.status(400).json({
+            success: false,
+            error: "Commande inconnue."
+        });
+    }
+
+    try {
+
+        console.log(
+            "Commande Spotify :",
+            action,
+            "session :",
+            code
+        );
+
+        const result = await spotifyRequest(
+            session,
+            command.method,
+            command.endpoint
+        );
+
+        // ------------------------------------------------
+        // 204 = LA COMMANDE A RÉUSSI
+        // ------------------------------------------------
+
+        if (result.status === 204) {
+
+            console.log(
+                "Commande Spotify réussie :",
+                action
+            );
+
+            return res.json({
+                success: true,
+                command: action
+            });
+        }
+
+        // ------------------------------------------------
+        // ERREUR PREMIUM
+        // ------------------------------------------------
+
+        if (result.status === 403) {
+
+            console.error(
+                "Spotify 403 :",
+                result.data
+            );
+
+            return res.status(403).json({
+                success: false,
+                error:
+                    "Spotify refuse cette commande. " +
+                    "Le contrôle de lecture nécessite Spotify Premium."
+            });
+        }
+
+        // ------------------------------------------------
+        // AUTRE ERREUR
+        // ------------------------------------------------
+
+        if (result.status >= 400) {
+
+            console.error(
+                "Erreur commande Spotify :",
+                result.status,
+                result.data
+            );
+
+            return res.status(502).json({
+                success: false,
+                error:
+                    result.data?.error?.message ||
+                    "Spotify a refusé la commande."
+            });
+        }
+
+        return res.json({
+            success: true,
+            command: action
+        });
+
+    } catch (err) {
+
+        console.error(
+            "Erreur commande :",
+            err
+        );
+
+        return res.status(500).json({
+            success: false,
+            error: err.message
+        });
+    }
+});
+
+
+// ======================================================
+// NETTOYAGE DES SESSIONS
+// ======================================================
 
 setInterval(() => {
 
     const now = Date.now();
 
-    for (
-        const [code, session]
-        of sessions
-    ) {
+    for (const [code, session] of sessions.entries()) {
 
-        /*
-        Sessions non connectées :
-        expiration après 10 minutes
-        */
-
+        // Supprime les sessions non connectées depuis 10 min
         if (
             !session.connected &&
-            now - session.createdAt >
-                10 * 60 * 1000
+            now - session.createdAt > 10 * 60 * 1000
         ) {
-
             sessions.delete(code);
 
+            console.log(
+                "Session expirée :",
+                code
+            );
         }
-
     }
 
 }, 60 * 1000);
 
-/*
-==================================================
-DÉMARRAGE
-==================================================
-*/
 
-app.listen(PORT, "0.0.0.0", () => {
+// ======================================================
+// SERVEUR
+// ======================================================
 
-    console.log(
-        `Roblox Spotify server running on port ${PORT}`
-    );
+app.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
 
-});
+        console.log("================================");
+        console.log("Spotify Roblox Server démarré !");
+        console.log("Port :", PORT);
+        console.log("Base URL :", BASE_URL);
+        console.log("Redirect URI :", REDIRECT_URI);
+        console.log("================================");
+    }
+);
